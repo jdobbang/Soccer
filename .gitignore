@@ -1,0 +1,4 @@
+detection_results/
+tracking_results/
+test.mp4
+yolo11x.pt
