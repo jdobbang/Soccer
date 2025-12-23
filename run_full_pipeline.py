@@ -23,9 +23,14 @@ from tqdm import tqdm
 import numpy as np
 import cv2
 
+import torch
+from torch.utils.data import Dataset, DataLoader
+import torchvision.transforms as T
+from PIL import Image
+import time
+
 # Import SORT tracker from existing implementation
 from sort_tracker import Sort
-
 
 # ============================================================================
 # Data Structures
@@ -481,12 +486,20 @@ def extract_reid_features(tracking_csv: str, frames_dir: str, output_pkl: str, d
     import torch
     import torchvision.transforms as T
     from PIL import Image
+    import time  # <--- 시간 측정을 위한 모듈 추가
+    import os
+    import cv2
+    import pickle
+    from tqdm import tqdm
+
+    start_time = time.time()  # <--- 시작 시간 기록
 
     print(f"\n=== Stage 3a: Re-ID Feature Extraction ===")
     print(f"Parameters: device={device}, batch_size={batch_size}")
 
     # Load Re-ID model
-    model = load_reid_model(device)
+    # (주의: load_reid_model 함수가 외부에 정의되어 있어야 합니다)
+    model = load_reid_model(device) 
 
     # Preprocessing transform
     transform = T.Compose([
@@ -497,6 +510,7 @@ def extract_reid_features(tracking_csv: str, frames_dir: str, output_pkl: str, d
 
     # Load tracking data
     print(f"Loading tracking data from {tracking_csv}...")
+    # (주의: csv_to_tracklets 함수가 외부에 정의되어 있어야 합니다)
     tracklets = csv_to_tracklets(tracking_csv)
 
     # Count total images to process
@@ -585,11 +599,231 @@ def extract_reid_features(tracking_csv: str, frames_dir: str, output_pkl: str, d
     with open(output_pkl, 'wb') as f:
         pickle.dump(reid_features, f)
 
+    end_time = time.time()  # <--- 종료 시간 기록
+    elapsed_time = end_time - start_time  # <--- 차이 계산
+    
+    # 보기 좋게 분/초로 변환
+    minutes = int(elapsed_time // 60)
+    seconds = int(elapsed_time % 60)
+
     print(f"Extracted {len(reid_features)} Re-ID features")
     print(f"Saved: {output_pkl}")
+    print(f"Total execution time: {minutes}m {seconds}s ({elapsed_time:.2f} seconds)") # <--- 소요 시간 출력
 
     return reid_features
 
+
+def _worker_extract_features(
+    worker_id: int,
+    tracklet_items: List[Tuple[int, 'Tracklet']],
+    frames_dir: str,
+    batch_size: int,
+    result_queue,
+    total_images: int
+):
+    """
+    Worker function for parallel Re-ID feature extraction.
+    Each worker loads its own model and processes a subset of tracklets.
+    """
+    import torch
+    import torchvision.transforms as T
+    from PIL import Image
+
+    # Load model for this worker
+    model = load_reid_model('cuda')
+
+    transform = T.Compose([
+        T.Resize((256, 128)),
+        T.ToTensor(),
+        T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+    ])
+
+    reid_features = {}
+    batch_images = []
+    batch_keys = []
+    processed = 0
+
+    with torch.no_grad():
+        for track_id, tracklet in tracklet_items:
+            for i, frame in enumerate(tracklet.frames):
+                bbox = tracklet.bboxes[i]
+
+                # Determine frame path
+                frame_path = os.path.join(frames_dir, f"frame_{frame:06d}.jpg")
+                if not os.path.exists(frame_path):
+                    frame_path = os.path.join(frames_dir, f"frame_{frame}.jpg")
+
+                if not os.path.exists(frame_path):
+                    processed += 1
+                    continue
+
+                # Read and crop image
+                img = cv2.imread(frame_path)
+                if img is None:
+                    processed += 1
+                    continue
+
+                x1, y1, x2, y2 = map(int, bbox)
+                x1, y1 = max(0, x1), max(0, y1)
+                x2, y2 = min(img.shape[1], x2), min(img.shape[0], y2)
+
+                if x2 <= x1 or y2 <= y1:
+                    processed += 1
+                    continue
+
+                crop = img[y1:y2, x1:x2]
+                crop_rgb = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
+                crop_pil = Image.fromarray(crop_rgb)
+
+                crop_tensor = transform(crop_pil)
+                batch_images.append(crop_tensor)
+                batch_keys.append((frame, track_id))
+
+                # Process batch if full
+                if len(batch_images) >= batch_size:
+                    batch_tensor = torch.stack(batch_images).cuda()
+                    features = model(batch_tensor)
+
+                    for j, key in enumerate(batch_keys):
+                        reid_features[key] = features[j].cpu().numpy()
+
+                    processed += len(batch_images)
+                    batch_images = []
+                    batch_keys = []
+
+        # Process remaining batch
+        if batch_images:
+            batch_tensor = torch.stack(batch_images).cuda()
+            features = model(batch_tensor)
+
+            for j, key in enumerate(batch_keys):
+                reid_features[key] = features[j].cpu().numpy()
+            processed += len(batch_images)
+
+    # Put results in queue
+    result_queue.put((worker_id, reid_features))
+    print(f"Worker {worker_id}: Completed {len(reid_features)} features")
+
+
+class TrackletDataset(Dataset):
+    def __init__(self, tracklets, frames_dir, transform=None):
+        self.samples = []
+        self.transform = transform
+        
+        # 데이터를 (이미지경로, 메타데이터) 리스트로 평탄화(Flatten)
+        # 이렇게 하면 로드 밸런싱 문제가 해결됩니다.
+        for track_id, tracklet in tracklets.items():
+            for i, frame_idx in enumerate(tracklet.frames):
+                bbox = tracklet.bboxes[i]
+                self.samples.append({
+                    "frame_idx": frame_idx,
+                    "track_id": track_id,
+                    "bbox": bbox,
+                    "frame_path": os.path.join(frames_dir, f"frame_{frame_idx:06d}.jpg") # 경로 미리 계산
+                })
+
+    def __len__(self):
+        return len(self.samples)
+
+    def __getitem__(self, idx):
+        item = self.samples[idx]
+        path = item['frame_path']
+        
+        # 이미지 로드 실패 대비
+        if not os.path.exists(path):
+            # 대체 경로 시도 등 로직 추가 가능
+            return None 
+
+        img = cv2.imread(path)
+        if img is None:
+            return None
+
+        x1, y1, x2, y2 = map(int, item['bbox'])
+        # (좌표 보정 로직 생략 - 필요시 추가)
+        x1, y1 = max(0, x1), max(0, y1)
+        x2, y2 = min(img.shape[1], x2), min(img.shape[0], y2)
+
+        crop = img[y1:y2, x1:x2]
+        if crop.size == 0:
+            return None
+            
+        crop = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
+        crop_pil = Image.fromarray(crop)
+
+        if self.transform:
+            crop_tensor = self.transform(crop_pil)
+        
+        # 텐서와 식별키(track_id, frame_idx)를 함께 반환
+        return crop_tensor, (item['track_id'], item['frame_idx'])
+
+def collate_fn(batch):
+    """None 데이터를 필터링하고 배치를 구성하는 함수"""
+    batch = [item for item in batch if item is not None]
+    if len(batch) == 0:
+        return None, None
+    
+    imgs, keys = zip(*batch)
+    return torch.stack(imgs), keys
+
+def extract_reid_features_efficient(tracking_csv, frames_dir, output_pkl, device='cuda', batch_size=32, num_workers=8):
+    start_time = time.time()
+    
+    print(f"\n=== Stage 3a: Re-ID Feature Extraction (DataLoader) ===")
+    
+    # 1. 모델 로드 (메인 프로세스에서 한 번만!)
+    model = load_reid_model(device)
+    model.eval()
+
+    # 2. 전처리 정의
+    transform = T.Compose([
+        T.Resize((256, 128)),
+        T.ToTensor(),
+        T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+    ])
+
+    # 3. 데이터셋 준비
+    tracklets = csv_to_tracklets(tracking_csv)
+    dataset = TrackletDataset(tracklets, frames_dir, transform)
+    
+    # 4. DataLoader 생성 (여기가 병렬 처리의 핵심)
+    # num_workers=8이면 CPU 코어 8개가 이미지를 미리 읽어서 배치를 만들어 대기합니다.
+    dataloader = DataLoader(
+        dataset, 
+        batch_size=batch_size, 
+        shuffle=False, 
+        num_workers=num_workers,
+        collate_fn=collate_fn,
+        pin_memory=True if device == 'cuda' else False # GPU 전송 속도 향상
+    )
+
+    print(f"Total images: {len(dataset)}")
+    
+    reid_features = {}
+    
+    # 5. 추론 루프
+    with torch.no_grad():
+        for batch_imgs, batch_keys in tqdm(dataloader, desc="Extracting"):
+            if batch_imgs is None: continue
+            
+            if device == 'cuda':
+                batch_imgs = batch_imgs.cuda(non_blocking=True)
+            
+            features = model(batch_imgs)
+            features_np = features.cpu().numpy()
+            
+            # 결과 저장
+            for i, (track_id, frame_idx) in enumerate(batch_keys):
+                reid_features[(frame_idx, track_id)] = features_np[i]
+
+    # 저장
+    os.makedirs(os.path.dirname(output_pkl), exist_ok=True)
+    with open(output_pkl, 'wb') as f:
+        pickle.dump(reid_features, f)
+        
+    elapsed = time.time() - start_time
+    print(f"Done. Time: {elapsed//60:.0f}m {elapsed%60:.0f}s")
+    
+    return reid_features
 
 # ============================================================================
 # Stage 4: Re-ID Based Merging
@@ -891,26 +1125,30 @@ def main():
                        help="Device for Re-ID model (default: cuda)")
     parser.add_argument("--batch-size", type=int, default=32,
                        help="Batch size for Re-ID extraction (default: 32)")
+    parser.add_argument("--num-reid-workers", type=int, default=8,
+                       help="Number of parallel workers for Re-ID extraction (default: 8)")
 
     args = parser.parse_args()
 
     # Create output directory
-    os.makedirs(args.output_dir, exist_ok=True)
+    output_dir = os.path.join(args.output_dir, f"result_{args.start_frame}_{args.end_frame}/csv")
+    os.makedirs(output_dir, exist_ok=True)
 
     # Define output paths
-    step1_csv = os.path.join(args.output_dir, "step1_sort_raw.csv")
-    step2_csv = os.path.join(args.output_dir, "step2_interpolated.csv")
-    step3_csv = os.path.join(args.output_dir, "step3_reid_merged.csv")
-    step4_csv = os.path.join(args.output_dir, "step4_post_interpolated.csv")
-    reid_pkl = os.path.join(args.output_dir, "reid_features.pkl")
+    step1_csv = os.path.join(output_dir, "step1_sort_raw.csv")
+    step2_csv = os.path.join(output_dir, "step2_interpolated.csv")
+    step3_csv = os.path.join(output_dir, "step3_reid_merged.csv")
+    step4_csv = os.path.join(output_dir, "step4_post_interpolated.csv")
+    reid_pkl = os.path.join(output_dir, "reid_features.pkl")
 
     print("="*70)
     print("4-STAGE SOCCER TRACKING PIPELINE")
     print("="*70)
     print(f"Input detections: {args.detections}")
     print(f"Frames directory: {args.frames_dir}")
-    print(f"Output directory: {args.output_dir}")
+    print(f"Output directory: {output_dir}")
     print(f"Frame range: {args.start_frame or 'start'} - {args.end_frame or 'end'}")
+    print(f"Re-ID workers: {args.num_reid_workers}")
     print("="*70)
 
     # Stage 1: SORT Tracking
@@ -936,14 +1174,15 @@ def main():
         step1_csv, step2_csv, max_gap=args.max_gap
     )
 
-    # Stage 3: Re-ID Feature Extraction (optional)
+    # Stage 3: Re-ID Feature Extraction (parallel)
     try:
-        reid_features = extract_reid_features(
+        reid_features = extract_reid_features_efficient(
             step2_csv, args.frames_dir, reid_pkl,
-            device=args.device, batch_size=args.batch_size
+            device=args.device, batch_size=args.batch_size,
+            num_workers=args.num_reid_workers
         )
 
-        # Stage 3: Re-ID Based Merging
+        # Stage 3b: Re-ID Based Merging
         merged_tracklets = run_reid_merging(
             step2_csv, reid_pkl, step3_csv,
             similarity_threshold=args.similarity_threshold,

@@ -21,7 +21,7 @@ def generate_color(track_id):
     return tuple(np.random.randint(0, 255, 3).tolist())
 
 
-def visualize_tracking(tracking_csv, frames_dir, output_dir):
+def visualize_tracking(tracking_csv, frames_dir, output_dir_base):
     """
     Visualize tracking results on frames.
     
@@ -30,13 +30,10 @@ def visualize_tracking(tracking_csv, frames_dir, output_dir):
         frames_dir: Directory containing frame images
         output_dir: Directory to save visualized frames
     """
-    # Create output directory
-    os.makedirs(output_dir, exist_ok=True)
-    
-    # Read tracking results grouped by frame
+    # Read tracking results grouped by frame (do this before creating output dir)
     print("Reading tracking results...")
     tracks_by_frame = defaultdict(list)
-    
+
     with open(tracking_csv, 'r') as f:
         reader = csv.DictReader(f)
         for row in reader:
@@ -47,12 +44,27 @@ def visualize_tracking(tracking_csv, frames_dir, output_dir):
             x2 = float(row['x2'])
             y2 = float(row['y2'])
             confidence = float(row['confidence'])
-            
             tracks_by_frame[frame_num].append({
                 'track_id': track_id,
                 'bbox': (x1, y1, x2, y2),
                 'confidence': confidence
             })
+
+    # Determine min/max frame number
+    if tracks_by_frame:
+        frame_numbers = sorted(tracks_by_frame.keys())
+        min_frame = frame_numbers[0]
+        max_frame = frame_numbers[-1]
+        # Update output_dir to include frame range
+        output_dir = os.path.join(output_dir_base, f"result_{min_frame}_{max_frame}/vis")
+    else:
+        frame_numbers = []
+        min_frame = max_frame = None
+
+    # Create output directory
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # ...existing code...
     
     # Get unique track IDs and assign colors
     all_track_ids = set()
@@ -135,8 +147,9 @@ def main():
     parser.add_argument(
         "--output-dir",
         type=str,
-        default="tracking_results/tracking_visualization",
-        help="Output directory for visualized frames (default: tracking_visualization)"
+        default="tracking_results/",
+        help="Output directory for visualized frames (default: tracking_visualization).\n"
+             "최초/최종 프레임 번호가 자동으로 디렉토리명에 추가됩니다."
     )
     
     args = parser.parse_args()
