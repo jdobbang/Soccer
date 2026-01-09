@@ -92,7 +92,7 @@ def get_frame_dimensions(frames_dir, start_frame=0):
 # Stage 1: SORT Tracking
 # ============================================================================
 
-def load_detections_from_csv(csv_path, frames_dir=None, start_frame=None, end_frame=None, conf_threshold=0.1):
+def load_detections_from_csv(csv_path, frames_dir=None, start_frame=None, end_frame=None, conf_threshold=0.1, uniform_color=None):
     """
     Load detection results from CSV file.
 
@@ -102,6 +102,7 @@ def load_detections_from_csv(csv_path, frames_dir=None, start_frame=None, end_fr
         start_frame: Optional start frame (inclusive)
         end_frame: Optional end frame (inclusive)
         conf_threshold: Minimum confidence threshold for detections
+        uniform_color: Optional uniform color to filter (e.g., 'orange', 'black')
 
     Returns:
         detections_by_frame: Dictionary mapping frame numbers to detection arrays
@@ -112,6 +113,8 @@ def load_detections_from_csv(csv_path, frames_dir=None, start_frame=None, end_fr
         print(f"Filtering {frame_range}")
     if conf_threshold > 0.0:
         print(f"Applying confidence threshold: {conf_threshold}")
+    if uniform_color is not None:
+        print(f"Filtering by uniform_color: {uniform_color}")
 
     # Get frame dimensions for large bbox filtering
     frame_width, frame_height = None, None
@@ -126,6 +129,7 @@ def load_detections_from_csv(csv_path, frames_dir=None, start_frame=None, end_fr
     total_loaded = 0
     filtered_by_conf = 0
     filtered_by_large_low_conf = 0
+    filtered_by_color = 0
 
     with open(csv_path, 'r') as f:
         reader = csv.DictReader(f)
@@ -137,6 +141,12 @@ def load_detections_from_csv(csv_path, frames_dir=None, start_frame=None, end_fr
                 continue
             if end_frame is not None and frame_num > end_frame:
                 continue
+
+            # Filter by uniform color if specified
+            if uniform_color is not None:
+                if 'uniform_color' in row and row['uniform_color'] != uniform_color:
+                    filtered_by_color += 1
+                    continue
 
             x1 = float(row['x1'])
             y1 = float(row['y1'])
@@ -169,6 +179,8 @@ def load_detections_from_csv(csv_path, frames_dir=None, start_frame=None, end_fr
 
     total_detections = sum(len(dets) for dets in detections_by_frame.values())
     print(f"Loaded {total_detections} detections across {len(detections_by_frame)} frames")
+    if filtered_by_color > 0:
+        print(f"Filtered out {filtered_by_color} detections by uniform_color (keeping only '{uniform_color}')")
     if filtered_by_conf > 0:
         print(f"Filtered out {filtered_by_conf} detections below confidence threshold ({conf_threshold})")
     if filtered_by_large_low_conf > 0:
@@ -1110,6 +1122,8 @@ def main():
                        help="SORT IoU threshold (default: 0.3)")
     parser.add_argument("--confidence-threshold", type=float, default=0.1,
                        help="Detection confidence threshold (default: 0.1)")
+    parser.add_argument("--uniform-color", type=str, default=None,
+                       help="Filter by specific uniform color (e.g., 'orange', 'black'). If not specified, use all detections.")
 
     # Stage 2: Interpolation parameters
     parser.add_argument("--max-gap", type=int, default=30,
@@ -1157,7 +1171,8 @@ def main():
         frames_dir=args.frames_dir,
         start_frame=args.start_frame,
         end_frame=args.end_frame,
-        conf_threshold=args.confidence_threshold
+        conf_threshold=args.confidence_threshold,
+        uniform_color=args.uniform_color
     )
 
     tracks_by_frame = run_sort_tracking(
@@ -1173,7 +1188,7 @@ def main():
     interpolated_tracklets = run_interpolation(
         step1_csv, step2_csv, max_gap=args.max_gap
     )
-
+    """
     # Stage 3: Re-ID Feature Extraction (parallel)
     try:
         reid_features = extract_reid_features_efficient(
@@ -1231,7 +1246,7 @@ def main():
 
     print("\nTo visualize results:")
     print(f"python visualize_tracking.py {step4_csv} --frames-dir {args.frames_dir}")
-
+    """
 
 if __name__ == "__main__":
     main()

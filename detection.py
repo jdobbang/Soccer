@@ -137,7 +137,7 @@ def parse_args():
     parser.add_argument("model_name", help="YOLO model path (e.g. yolo11x.pt)")
     parser.add_argument("video_file", nargs="?", default="test.mp4", help="Input video path")
     parser.add_argument("--interval", type=int, default=1, help="Detection interval (frames)")
-    parser.add_argument("--batch", type=int, default=32, help="Batch size (default: 16)")
+    parser.add_argument("--batch", type=int, default=32, help="Batch size (default: 32)")
     return parser.parse_args()
 
 if __name__ == "__main__":
