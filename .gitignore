@@ -2,7 +2,9 @@ detection_results/
 frames/
 highlighted_player_10/
 tracking_results/
+ball_dataset/
+results/
+vis_result/
 
 *.mp4
 *.pt
-*.png
