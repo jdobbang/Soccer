@@ -14,10 +14,11 @@ import glob
 import torch
 import numpy as np
 import pandas as pd
-import easyocr
 from tqdm import tqdm
 from collections import defaultdict
 from typing import List, Dict, Any
+
+from utils.ocr_adapter import create_ocr_engine, OCREngine
 
 
 # Configuration
@@ -36,6 +37,12 @@ CONFIG = {
 
     # OCR
     'use_gpu': True,
+    'ocr_engine': 'paddleocr',       # 'paddleocr' or 'easyocr'
+    'ocr_use_angle_cls': True,       # PaddleOCR angle classification
+    'ocr_det': True,                 # Enable detection
+    'ocr_rec': True,                 # Enable recognition
+    'ocr_cls': True,                 # Enable classification
+    'ocr_show_log': False,           # Show PaddleOCR logs
     'min_ocr_confidence': 0.5,
     'preprocessing': True,
 
@@ -262,13 +269,13 @@ def validate_jersey_number(text, confidence, config=CONFIG):
     return True
 
 
-def detect_number_with_ocr(crop, ocr_engine, crop_meta, config=CONFIG):
+def detect_number_with_ocr(crop, ocr_engine: OCREngine, crop_meta, config=CONFIG):
     """
-    EasyOCR로 번호 검출
+    OCR로 번호 검출 (PaddleOCR 또는 EasyOCR)
 
     Args:
         crop: crop 이미지
-        ocr_engine: EasyOCR Reader instance
+        ocr_engine: OCREngine instance (PaddleOCR or EasyOCR adapter)
         crop_meta: crop metadata
         config: configuration dict
 
@@ -878,6 +885,15 @@ Examples:
     parser.add_argument('--min_bbox_area', type=float, default=500,
                         help='Minimum bbox area in pixels (default: 500)')
 
+    # OCR Engine Selection
+    parser.add_argument('--ocr_engine', type=str, default='paddleocr',
+                        choices=['paddleocr', 'easyocr'],
+                        help='OCR engine to use (default: paddleocr)')
+    parser.add_argument('--no_angle_cls', action='store_false', dest='use_angle_cls',
+                        help='Disable PaddleOCR angle classification')
+    parser.add_argument('--ocr_show_log', action='store_true',
+                        help='Show PaddleOCR logs')
+
     # OCR settings
     parser.add_argument('--use_gpu', action='store_true', default=True,
                         help='Use GPU for OCR (default: True)')
@@ -914,6 +930,9 @@ Examples:
     config['min_color_confidence'] = args.min_color_confidence
     config['min_bbox_area'] = args.min_bbox_area
     config['use_gpu'] = args.use_gpu
+    config['ocr_engine'] = args.ocr_engine
+    config['ocr_use_angle_cls'] = args.use_angle_cls
+    config['ocr_show_log'] = getattr(args, 'ocr_show_log', False)
     config['min_ocr_confidence'] = args.min_ocr_confidence
     config['preprocessing'] = args.preprocessing
     config['crop_mode'] = args.crop_mode
@@ -921,15 +940,24 @@ Examples:
     config['quality_percentile'] = args.quality_percentile
     config['uniform_interval'] = args.uniform_interval
 
-    # Initialize EasyOCR
+    # Initialize OCR Engine
     print("="*70)
-    print("Initializing EasyOCR")
+    print(f"Initializing OCR Engine: {config['ocr_engine'].upper()}")
     print("="*70)
     print(f"GPU: {args.use_gpu}")
 
-    ocr = easyocr.Reader(['en'], gpu=args.use_gpu)
+    ocr = create_ocr_engine(
+        engine_type=config['ocr_engine'],
+        lang='en',
+        use_gpu=args.use_gpu,
+        use_angle_cls=config['ocr_use_angle_cls'],
+        det=config['ocr_det'],
+        rec=config['ocr_rec'],
+        cls=config['ocr_cls'],
+        show_log=config['ocr_show_log']
+    )
 
-    print("EasyOCR initialized successfully")
+    print(f"{config['ocr_engine'].upper()} initialized successfully")
 
     # Discover CSV files
     csv_files = discover_csv_files(args)

@@ -6,8 +6,10 @@ vis_result/
 original_frames/
 ball_dataset/
 
+
 # Model weights
 *.pt
+detector_model/
 
 # Video files
 *.mp4

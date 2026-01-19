@@ -124,7 +124,7 @@ class ColorAnalyzer:
     def classify_color(
         self,
         crop: np.ndarray,
-        confidence_threshold: float = 0.15
+        confidence_threshold: float = 0.0
     ) -> Tuple[str, float]:
         """
         상체 영역에서 유니폼 색상 분류 (Euclidean distance 기반)
@@ -157,19 +157,27 @@ class ColorAnalyzer:
         # 각 팀 색상까지의 거리 계산
         scores = {}
         for team_name, center in self.team_color_centers.items():
-            # Euclidean distance: sqrt((H1-H2)^2 + (S1-S2)^2 + (V1-V2)^2)
-            distances = np.linalg.norm(valid_pixels_hsv - center, axis=1)
+            # HSV 거리 계산 (H는 원형 구조 고려)
+            h_diff = np.abs(valid_pixels_hsv[:, 0] - center[0])
+            h_diff = np.minimum(h_diff, 180 - h_diff)  # H는 원형이므로 최단 거리 사용
+
+            sv_diff = valid_pixels_hsv[:, 1:] - center[1:]
+
+            # 정규화된 거리 계산 (H: 0~180, S,V: 0~255)
+            h_normalized = h_diff / 180.0
+            sv_normalized = np.linalg.norm(sv_diff, axis=1) / 255.0
+
+            distances = np.sqrt(h_normalized**2 + sv_normalized**2)
 
             # 평균 거리를 역수로 변환하여 점수 계산
-            # score = 1 / (1 + mean_distance)
             # 거리 0 -> score 1.0, 거리 증가 -> score 감소
             mean_distance = np.mean(distances)
-            scores[team_name] = 1.0 / (1.0 + mean_distance)
+            scores[team_name] = 1.0 / (1.0 + mean_distance * 2)
 
         # 가장 높은 점수의 색상 선택
         best_color = max(scores, key=scores.get)
         best_score = scores[best_color]
-
+        print(best_color, best_score)
         # 임계값 적용
         if best_score < confidence_threshold:
             return 'unknown', best_score
