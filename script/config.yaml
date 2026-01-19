@@ -1,0 +1,112 @@
+# Soccer Analysis Pipeline Configuration
+# =====================================
+
+# 탐지 설정
+detection:
+  player_model: "yolo11x.pt"
+  ball_model: null  # Optional
+  confidence_threshold: 0.1
+  interval: 1  # Detection interval (frames)
+  batch_size: 32
+
+# 추적 설정 (SORT)
+tracking:
+  sort:
+    max_age: 30  # Maximum frames to keep alive a track
+    min_hits: 3  # Minimum detections before confirming track
+    iou_threshold: 0.3  # IoU threshold for matching
+
+  # 보간 설정
+  interpolation:
+    max_gap: 30  # Maximum frames to interpolate
+    method: "linear"  # Interpolation method
+
+  # Re-ID 설정
+  reid:
+    model_name: "osnet_x1_0"
+    pretrained: true
+    extract_features: true  # Enable Re-ID feature extraction
+
+    # 특징 추출 설정
+    feature_extraction:
+      batch_size: 32
+      num_workers: 4
+      max_samples_per_tracklet: 5  # Max samples per tracklet for speed
+      device: "cuda"  # cuda or cpu
+
+    # Tracklet 병합 설정
+    merging:
+      similarity_threshold: 0.7  # Cosine similarity threshold
+      max_time_gap: 150  # Maximum frames between tracklets to merge
+      max_spatial_distance: 200  # Base spatial distance threshold (pixels)
+      spatial_velocity_ratio: 2.0  # Distance increase per frame of gap
+
+# 색상 분류 설정
+color_classification:
+  enabled: true
+  upper_body_ratio: 0.5  # Ratio of upper body to use for color (0.5 = top 50%)
+  confidence_threshold: 0.15  # Minimum confidence to classify as known color
+
+  # 팀 색상 정의 (HSV 범위)
+  team_colors:
+    orange:
+      hsv_lower: [5, 100, 100]
+      hsv_upper: [25, 255, 255]
+      display_bgr: [0, 165, 255]
+    black:
+      hsv_lower: [0, 0, 0]
+      hsv_upper: [179, 255, 80]
+      display_bgr: [0, 0, 0]
+
+  # 제외할 색상 (배경)
+  exclude_colors:
+    grass:
+      hsv_lower: [35, 40, 40]
+      hsv_upper: [85, 255, 255]
+    skin:
+      hsv_lower: [0, 20, 70]
+      hsv_upper: [20, 150, 255]
+
+# 시각화 설정
+visualization:
+  enabled: true
+  save_annotated_frames: true
+  draw_track_ids: true
+  draw_confidence: true
+  bbox_thickness: 2
+  font_size: 0.5
+
+# 경로 설정
+paths:
+  output_dir: "results"
+  frames_dir: "images"
+  cache_dir: "cache"
+
+  # 중간 결과 저장
+  save_intermediate:
+    sort_raw: true
+    interpolated: true
+    reid_merged: true
+    post_interpolated: true
+
+# 필터링 설정
+filtering:
+  # 탐지 필터링
+  detection:
+    min_confidence: 0.1
+    filter_by_uniform_color: null  # null (사용 안함) 또는 'orange', 'black'
+    remove_large_low_confidence: true
+    large_bbox_threshold: 0.1  # 10% of frame area
+    low_confidence_threshold: 0.5
+
+  # 프레임 범위 (null이면 전체)
+  frame_range:
+    start: null
+    end: null
+
+# 기록(Logging) 설정
+logging:
+  verbose: true
+  progress_bar: true
+  save_logs: true
+  log_dir: "logs"

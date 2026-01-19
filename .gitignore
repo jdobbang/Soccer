@@ -1,10 +1,40 @@
+# Generated files and outputs
 detection_results/
-frames/
-highlighted_player_10/
 tracking_results/
-ball_dataset/
 results/
 vis_result/
+original_frames/
+ball_dataset/
 
-*.mp4
+# Model weights
 *.pt
+
+# Video files
+*.mp4
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+
+# Keep asset folder with images
+!asset/
+!asset/**/*.jpg
+!asset/**/*.png
+!asset/**/*.jpeg
